@@ -1,50 +1,28 @@
 # app.py
 
 import streamlit as st
-import pandas as pd
-from agent import create_agent as create_agent_main
-from agent_checkpoints.agent_checkpoint_1 import (
-    create_agent as create_agent_checkpoint_1,
-)
-from agent_checkpoints.agent_checkpoint_2 import (
-    create_agent as create_agent_checkpoint_2,
-)
-from agent_checkpoints.agent_checkpoint_3 import (
-    create_agent as create_agent_checkpoint_3,
-)
-from agent_checkpoints.agent_checkpoint_4 import (
-    create_agent as create_agent_checkpoint_4,
-)
-from agent_checkpoints.agent_checkpoint_5 import (
-    create_agent as create_agent_checkpoint_5,
-)
-from agent_checkpoints.agent_checkpoint_6 import (
-    create_agent as create_agent_checkpoint_6,
-)
-from tools import ORDERS_TABLE, SHIPMENTS_TABLE
+
+from agent_cot import create_cot_agent
+from agent_tot import create_tot_agent
+from tic_tac_toe import create_new_game
 from dotenv import load_dotenv
 
 list_of_agents = {
-    "agent": create_agent_main,
-    "agent_checkpoint_1": create_agent_checkpoint_1,
-    "agent_checkpoint_2": create_agent_checkpoint_2,
-    "agent_checkpoint_3": create_agent_checkpoint_3,
-    "agent_checkpoint_4": create_agent_checkpoint_4,
-    "agent_checkpoint_5": create_agent_checkpoint_5,
-    "agent_checkpoint_6": create_agent_checkpoint_6,
+    "CoT Agent": create_cot_agent,
+    "ToT Agent": create_tot_agent,
 }
 
 load_dotenv()
 
-st.set_page_config(page_title="ReAct Agent Demo", layout="wide")
+st.set_page_config(page_title="Tic-Tac-Toe AI Agents", layout="wide")
 
 # --- Make Sidebar Wider ---
 st.markdown(
     """
     <style>
         [data-testid="stSidebar"] {
-            min-width: 600px;
-            max-width: 600px;
+            min-width: 400px;
+            max-width: 400px;
         }
     </style>
     """,
@@ -52,18 +30,17 @@ st.markdown(
 )
 
 # --- Session State Initialization ---
-if "user_id" not in st.session_state:
-    st.session_state.user_id = None
-    st.session_state.user_name = None
-
-if "messages" not in st.session_state:
-    st.session_state.messages = []
+if "game" not in st.session_state:
+    st.session_state.game = create_new_game()
 
 if "selected_agent" not in st.session_state:
-    st.session_state.selected_agent = "agent_checkpoint_1"
+    st.session_state.selected_agent = "CoT Agent"
 
 if "user_selected_agent" not in st.session_state:
-    st.session_state.user_selected_agent = "agent_checkpoint_1"
+    st.session_state.user_selected_agent = "CoT Agent"
+
+if "agent_reasoning" not in st.session_state:
+    st.session_state.agent_reasoning = None
 
 if (
     "agent" not in st.session_state
@@ -73,129 +50,178 @@ if (
         agent_factory = list_of_agents[st.session_state.user_selected_agent]
         st.session_state.agent = agent_factory()
         st.session_state.selected_agent = st.session_state.user_selected_agent
-    except Exception as e:
+    except (ValueError, KeyError, AttributeError) as e:
         st.session_state.agent = None
         st.error(f"Failed to initialize {st.session_state.user_selected_agent}: {e}")
 
 
 # --- Sidebar ---
 with st.sidebar:
-    st.header("⚙️ Settings")
+    st.header("🎮 Tic-Tac-Toe AI Agents")
+
+    # Agent selection
     selected_agent = st.selectbox("Select Agent", list(list_of_agents.keys()))
     st.session_state.user_selected_agent = selected_agent
 
-    st.header("User Info")
-    # Build mapping of customer_name → customer_id
-    customer_map = {
-        order.customer_name: getattr(order, "customer_id", None)
-        for order in ORDERS_TABLE.values()
-    }
-    selected_name = st.selectbox("Select User", list(customer_map.keys()))
-    st.session_state.user_id = customer_map[selected_name]
-    st.session_state.user_name = selected_name
+    st.divider()
 
-    st.header("⚙️ Settings")
-
-    if st.button("Clear Chat"):
-        st.session_state.messages.clear()
+    # Game controls
+    st.subheader("Game Controls")
+    if st.button("🔄 New Game"):
+        st.session_state.game = create_new_game()
+        st.session_state.agent_reasoning = None
         st.rerun()
 
+    # Game status
+    st.subheader("Game Status")
+    game = st.session_state.game
+    st.write(f"**Status:** {game.get_status_message()}")
+    st.write(f"**Moves:** {len(game.move_history)}")
+
     st.divider()
-    st.subheader("📦 Orders Table")
-    orders_df = pd.DataFrame([v.model_dump() for v in ORDERS_TABLE.values()])
-    st.dataframe(orders_df, width="stretch")
 
-    st.subheader("🚚 Shipments Table")
-    shipments_df = pd.DataFrame([v.model_dump() for v in SHIPMENTS_TABLE.values()])
-    st.dataframe(shipments_df, width="stretch")
-
-
-# --- Chat Window ---
-st.title("💬 Customer Support Agent")
-
-# Display messages
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
-        if "num_iterations" in message:
-            st.markdown(f"**Number of llm calls:** {message['num_iterations']}")
-        if "actions" in message and message["actions"]:
-            with st.expander("🔍 Reasoning trace", expanded=False):
-                for step in message["actions"]:
-                    if "action" in step:
-                        st.markdown(f"**Action:** {step['action']}")
-                        if "action_input" in step:
-                            st.json(step["action_input"])
-                        if "observation" in step:
-                            st.markdown(f"**Observation:** {step['observation']}")
-                    elif "response" in step:
-                        st.markdown(f"**Response:** {step['response']}")
-                    st.markdown("---")
-
-
-# --- Chat Input ---
-if prompt := st.chat_input("Ask about orders or shipments..."):
-    if not st.session_state.agent:
-        st.error(
-            "❌ Agent not initialized. Please check your OPENAI_API_KEY environment variable."
+    # Agent info
+    st.subheader("Agent Info")
+    if st.session_state.agent:
+        agent_type = st.session_state.agent.__class__.__name__
+        st.write(f"**Agent Type:** {agent_type}")
+        st.write(
+            f"**Strategy:** {'Chain-of-Thought' if 'CoT' in agent_type else 'Tree-of-Thought'}"
         )
     else:
-        # Add user message
-        st.session_state.messages.append({"role": "user", "content": prompt})
+        st.error("❌ Agent not initialized")
 
-        with st.chat_message("user"):
-            st.markdown(prompt)
 
-        chat_history = [
-            {
-                "role": "user",
-                "content": f"customer_id: {st.session_state.user_id}, customer_name: {st.session_state.user_name}",
-            }
-        ]
-        # Build chat history for agent
-        chat_history += [
-            {"role": m["role"], "content": m["content"]}
-            for m in st.session_state.messages
-            if m["role"] in ["user", "assistant"]
-        ]
+# --- Main Game Interface ---
+st.title("🎮 Tic-Tac-Toe vs AI Agent")
 
-        with st.chat_message("assistant"):
-            with st.spinner("Thinking..."):
-                try:
-                    response = st.session_state.agent.run(prompt)
-                    content = response.get("final_answer", "")
-                    reasoning_trace = response.get("reasoning_trace", [])
-                    num_iterations = response.get("num_iterations", 0)
+# Create two columns: game board and reasoning
+col1, col2 = st.columns([1, 1])
 
-                    st.markdown(content)
-                    st.markdown(f"**Number of llm calls:** {num_iterations}")
-                    if reasoning_trace:
-                        with st.expander("🔍 Reasoning trace", expanded=False):
-                            for step in reasoning_trace:
-                                if "action" in step:
-                                    st.markdown(f"**Action:** {step['action']}")
-                                    if "action_input" in step:
-                                        st.json(step["action_input"])
-                                    if "observation" in step:
-                                        st.markdown(
-                                            f"**Observation:** {step['observation']}"
-                                        )
-                                elif "response" in step:
-                                    st.markdown(f"**Response:** {step['response']}")
-                                st.markdown("---")
+with col1:
+    st.subheader("🎯 Game Board")
 
-                    # Add assistant message
-                    st.session_state.messages.append(
-                        {
-                            "role": "assistant",
-                            "content": content,
-                            "actions": reasoning_trace,
-                            "num_iterations": num_iterations,
-                        }
-                    )
+    # Display the game board
+    game = st.session_state.game
+    board = game.board
 
-                except Exception as e:
-                    st.error(f"❌ Error: {e}")
-                    st.session_state.messages.append(
-                        {"role": "assistant", "content": f"❌ Error: {e}"}
-                    )
+    # A1-C3 coordinate mapping
+    coordinates = ["A1", "A2", "A3", "B1", "B2", "B3", "C1", "C2", "C3"]
+
+    # Create 3x3 grid of buttons with coordinates
+    for i in range(0, 9, 3):
+        cols = st.columns(3)
+        for j in range(3):
+            idx = i + j
+            coord = coordinates[idx]
+            with cols[j]:
+                if board[idx] == "":
+                    if st.button(
+                        f" \n{coord}", key=f"btn_{idx}", disabled=game.is_game_over()
+                    ):
+                        # Human player makes move
+                        if game.make_move(idx, "X"):
+                            st.session_state.agent_reasoning = None
+                            st.rerun()
+                else:
+                    st.button(f"{board[idx]}\n{coord}", key=f"btn_{idx}", disabled=True)
+
+    # Game status
+    st.write(f"**{game.get_status_message()}**")
+
+    # Show board as text with A1-C3 coordinates
+    with st.expander("📋 Board State (Text)", expanded=False):
+        # Create enhanced board display with coordinates
+        board_str = ""
+        for i in range(0, 9, 3):
+            row = " | ".join([board[i + j] if board[i + j] else " " for j in range(3)])
+            coord_row = " | ".join([coordinates[i + j] for j in range(3)])
+            board_str += f"{row}\n"
+            board_str += f"{coord_row}\n"
+            if i < 6:
+                board_str += "---------\n"
+        st.text(board_str)
+
+with col2:
+    st.subheader("🧠 Agent Reasoning")
+
+    if st.session_state.agent_reasoning:
+        reasoning = st.session_state.agent_reasoning
+
+        # Show agent type
+        agent_type = reasoning.get("agent_type", "Unknown")
+        st.write(f"**Agent:** {agent_type}")
+
+        # Show reasoning trace
+        reasoning_trace = reasoning.get("reasoning_trace", [])
+
+        if agent_type == "CoT":
+            # Chain-of-Thought display
+            for i, step in enumerate(reasoning_trace):
+                with st.expander(f"Step {i+1}: Chain-of-Thought", expanded=True):
+                    st.write(step.get("thought", "No reasoning provided"))
+
+        elif agent_type == "ToT":
+            # Tree-of-Thought display
+            for i, branch in enumerate(reasoning_trace):
+                with st.expander(
+                    f"Branch {branch.get('branch', i+1)}: Tree-of-Thought",
+                    expanded=True,
+                ):
+                    st.write(branch.get("reasoning", "No reasoning provided"))
+
+            # Show final reasoning
+            final_reasoning = reasoning.get("final_reasoning", "")
+            if final_reasoning:
+                with st.expander("🎯 Final Decision", expanded=True):
+                    st.write(final_reasoning)
+
+        # Show move made
+        move = reasoning.get("move", -1)
+        if move >= 0:
+            st.write(f"**Move Made:** Position {move}")
+
+        # Show success status
+        success = reasoning.get("success", False)
+        if success:
+            st.success("✅ Agent reasoning completed successfully")
+        else:
+            st.error("❌ Agent reasoning failed")
+
+    else:
+        st.info(
+            "🤔 No reasoning available yet. Make a move to see the agent's thinking!"
+        )
+
+# Auto-make agent move after human move
+if (
+    not game.is_game_over()
+    and game.current_player == "O"
+    and st.session_state.agent
+    and len(game.move_history) > 0
+    and game.move_history[-1]["player"] == "X"
+):
+
+    with st.spinner("🤖 Agent is thinking..."):
+        try:
+            # Get agent's move
+            game_state = game.get_state()
+            response = st.session_state.agent.run(game_state)
+
+            # Store reasoning for display
+            st.session_state.agent_reasoning = response
+
+            # Make the agent's move
+            agent_move = response.get("move", 0)
+            if game.make_move(agent_move, "O"):
+                st.rerun()
+            else:
+                st.error("❌ Agent made an invalid move")
+
+        except (ValueError, KeyError, AttributeError) as e:
+            st.error(f"❌ Agent error: {e}")
+            # Fallback: make a random valid move
+            available_moves = game.get_available_moves()
+            if available_moves:
+                game.make_move(available_moves[0], "O")
+                st.rerun()
