@@ -93,9 +93,8 @@ class TicTacToeToTAgent:
     def __init__(self, api_key: str, model_name: str = "openai/gpt-oss-120b"):
         self.llm = ChatGroq(api_key=api_key, model_name=model_name)
 
-        # Note: Strategy and prompt are handled by ToTChain internally
-
         # Initialize ToTChain with custom ToT strategy
+        # Note: TicTacToeToTStrategy already has its own prompt defined
         self.chain = ToTChain(
             llm=self.llm,
             c=3,  # Explore multiple branches - 3 thoughts per step
@@ -153,9 +152,10 @@ Think through this systematically, exploring multiple branches of reasoning, and
 
     def _format_game_state(self, state: Dict[str, Any]) -> str:
         """Format the game state for the LLM."""
-        base_prompt = self._create_tic_tac_toe_prompt()
         board = state.get("board", [""] * 9)
         current_player = state.get("current_player", "O")
+        
+        coordinates = ["A1", "A2", "A3", "B1", "B2", "B3", "C1", "C2", "C3"]
 
         # Create visual representation of the board
         board_str = ""
@@ -164,9 +164,6 @@ Think through this systematically, exploring multiple branches of reasoning, and
             board_str += f"{row}\n"
             if i < 6:
                 board_str += "_ _ _\n"
-
-        # Available positions just by index (1–9)
-        available_positions = [str(i + 1) for i, cell in enumerate(board) if not cell]
 
         # Convert available positions to A1-C3 format
         available_positions = [
@@ -177,13 +174,59 @@ Think through this systematically, exploring multiple branches of reasoning, and
 Board State (with A1-C3 coordinates):
 {board_str}
 Available positions (A1-C3 coordinates): {available_positions}"""
-        return base_prompt.replace("{problem_description}", game_state)
+        return game_state
 
     def _parse_move_from_response(self, response: str) -> int:
         """Extract the move from the LLM response."""
         import re
         logger.info(f"Parsing response: {response}")
-        # First priority: Look for "Final Move: X" format (1-9 indexing)
+        logger.debug(f"Response format check - contains '**Final Move:**'?: {'**Final Move:**' in response}")
+        logger.debug(f"Response format check - contains 'Final Move:'?: {'Final Move:' in response}")
+        
+        # Coordinate mapping: A1-C3 to 0-8 indices
+        coord_to_index = {
+            "A1": 0,
+            "A2": 1,
+            "A3": 2,
+            "B1": 3,
+            "B2": 4,
+            "B3": 5,
+            "C1": 6,
+            "C2": 7,
+            "C3": 8,
+        }
+        
+        # HIGHEST priority: Look for "Final Move: X" or "Final Move: XX" with bolded/starred format
+        # This handles cases like "**Final Move:** 2" with special formatting
+        special_final_move = re.search(r"\*{0,2}Final\s+Move:?\*{0,2}\s*:?\s*\*{0,2}\s*([1-9]|[A-C][1-3])\*{0,2}", response, re.IGNORECASE)
+        if special_final_move:
+            move_text = special_final_move.group(1)
+            logger.info(f"Found specially formatted final move: {move_text}")
+            
+            # Check if it's an A1-C3 coordinate
+            if re.match(r"[A-C][1-3]", move_text, re.IGNORECASE):
+                coord = move_text.upper()
+                if coord in coord_to_index:
+                    logger.info(f"Parsed as A1-C3 coordinate: {coord}")
+                    return coord_to_index[coord]
+            
+            # Check if it's a 1-9 digit
+            if re.match(r"[1-9]", move_text):
+                move = int(move_text) - 1  # Convert 1-9 to 0-8
+                logger.info(f"Parsed as position number: {move + 1}")
+                return move
+        
+        # Part 1: Look for A1-C3 coordinate format (primary format)
+        # First priority: Look for the "Final Move: XX" format with A1-C3 coordinates
+        final_move_match = re.search(r"Final\s+Move\s*:\s*([A-C][1-3])", response, re.IGNORECASE)
+        if final_move_match:
+            coord = final_move_match.group(1).upper()
+            if coord in coord_to_index:
+                logger.info(f"Found 'Final Move' coordinate: {coord}")
+                return coord_to_index[coord]
+
+        # Part 2: Look for 1-9 index format (secondary format)
+        # Look for "Final Move: X" format (1-9 indexing)
         final_move_match = re.search(
             r"Final\s+Move\s*:\s*([1-9])", response, re.IGNORECASE
         )
@@ -191,8 +234,8 @@ Available positions (A1-C3 coordinates): {available_positions}"""
             move = int(final_move_match.group(1)) - 1  # Convert 1-9 to 0-8
             logger.info(f"Found 'Final Move' position: {move + 1}")
             return move
-
-        # Look for explicit coordinate statements first (highest priority)
+            
+        # Look for explicit coordinate statements (third priority)
         coord_patterns = [
             r"place\s+[oO]\s+(?:at\s+)?([A-C][1-3])",
             r"move\s+[oO]\s+to\s+([A-C][1-3])",
@@ -210,13 +253,6 @@ Available positions (A1-C3 coordinates): {available_positions}"""
             r"conclusion.*?([A-C][1-3])",
             r"strategic.*?([A-C][1-3])",
         ]
-        
-        final_move_match = re.search(r"Final\s+Move\s*:\s*([A-C][1-3])", response, re.IGNORECASE)
-        if final_move_match:
-            coord = final_move_match.group(1).upper()
-            if coord in coord_to_index:
-                logger.info(f"Found 'Final Move' coordinate: {coord}")
-                return coord_to_index[coord]
 
 
         for pattern in coord_patterns:
