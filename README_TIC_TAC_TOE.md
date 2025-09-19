@@ -154,7 +154,7 @@ ToTChain(
 
 ### Customization
 
-- **Model**: Change `model_name` in agent constructors (default: "gpt-4o-mini")
+- **Model**: Change `model_name` in agent constructors (default: "openai/gpt-oss-120b")
 - **Branches**: Modify `c` parameter for ToT agent (default: 3)
 - **Prompts**: Customize reasoning prompts in `_create_tic_tac_toe_prompt()`
 

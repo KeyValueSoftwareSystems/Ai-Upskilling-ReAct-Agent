@@ -17,8 +17,8 @@ def test_agents():
     load_dotenv()
 
     # Check if API key is available
-    if not os.getenv("OPENAI_API_KEY"):
-        print("❌ OPENAI_API_KEY not found. Please set it in your environment.")
+    if not os.getenv("GROQ_API_KEY"):
+        print("❌ GROQ_API_KEY not found. Please set it in your environment.")
         return
 
     print("🧪 Testing Tic-Tac-Toe AI Agents")

@@ -9,8 +9,8 @@ This file contains:
 
 import os
 from typing import Dict, Any, List
-from langchain_openai import ChatOpenAI
-from langchain_experimental.tot.thought_generation import BaseThoughtGenerationStrategy
+from langchain_groq import ChatGroq
+from langchain_experimental.tot.thought_generation import ProposePromptStrategy, BaseThoughtGenerationStrategy
 from langchain_experimental.tot.base import ToTChain
 from langchain_core.prompts import PromptTemplate
 from tic_tac_toe_checker import TicTacToeToTChecker
@@ -90,8 +90,8 @@ class TicTacToeToTAgent:
     Explores multiple branches of possible moves before selecting the best one.
     """
 
-    def __init__(self, api_key: str, model_name: str = "gpt-4o"):
-        self.llm = ChatOpenAI(api_key=api_key, model_name=model_name)
+    def __init__(self, api_key: str, model_name: str = "openai/gpt-oss-120b"):
+        self.llm = ChatGroq(api_key=api_key, model_name=model_name)
 
         # Note: Strategy and prompt are handled by ToTChain internally
 
@@ -105,8 +105,55 @@ class TicTacToeToTAgent:
 
         self.reasoning_trace = []
 
+    def _create_tic_tac_toe_prompt(self) -> str:
+        """Create a custom prompt for tic-tac-toe reasoning with tree exploration."""
+        return """You are an expert tic-tac-toe player using Tree-of-Thought reasoning. Your task is to analyze the current game state and explore multiple possible moves before selecting the best one.
+
+Game Rules:
+- The board is a 3x3 grid with positions identified by coordinates:
+| A1 | A2 | A3 |
+| B1 | B2 | B3 |
+| C1 | C2 | C3 |
+
+- Players take turns placing X or O
+- Your goal is to get 3 O characters in a winning condition (horizontally, vertically, or diagonally) while blocking the player from getting 3 X 's in one of the winning condition.
+- If all 9 positions are filled without a winner, it's a draw
+
+Winning Conditions for O and X:
+- Horizontal: A1-A2-A3, B1-B2-B3, or C1-C2-C3
+- Vertical: A1-B1-C1, A2-B2-C2, or A3-B3-C3
+- Diagonal: A1-B2-C3 or A3-B2-C1
+
+IMPORTANT: Use A1-C3 coordinate system for all position references. A1 is top-left, B2 is center, C3 is bottom-right.
+
+Current Game State:
+{problem_description}
+
+Your task:
+1. Analyze the current board state
+2. Generate multiple candidate moves (at least 3 different options using A1-C3 coordinates)
+3. For each candidate move, think through the potential consequences
+4. Consider both offensive and defensive strategies
+5. Evaluate the strength of each move based on:
+   - Immediate winning opportunities
+   - Blocking opponent's winning opportunities
+   - Creating future winning opportunities
+   - Center control and corner advantages
+6. Select the best move after considering all alternatives
+7. After selecting the best move, always output your final move on a new line in this exact format:
+Final Move: <coordinate>
+
+Example:
+Thought 1: ...your reasoning...
+Thought 2: ...your reasoning...
+..
+Final Move: B2
+
+Think through this systematically, exploring multiple branches of reasoning, and provide your final move as a coordinate (e.g., A1, B2, C3) along with your reasoning for why this move is superior to the alternatives. Make sure the Final Move is on its own line."""
+
     def _format_game_state(self, state: Dict[str, Any]) -> str:
-        """Format the game state for the LLM without coordinates."""
+        """Format the game state for the LLM."""
+        base_prompt = self._create_tic_tac_toe_prompt()
         board = state.get("board", [""] * 9)
         current_player = state.get("current_player", "O")
 
@@ -121,17 +168,21 @@ class TicTacToeToTAgent:
         # Available positions just by index (1–9)
         available_positions = [str(i + 1) for i, cell in enumerate(board) if not cell]
 
-        return f"""Current Player: {current_player}
-    
-    {board_str}
-    
-    Available Positions: {", ".join(available_positions)}
-    """
+        # Convert available positions to A1-C3 format
+        available_positions = [
+            coordinates[i] for i, cell in enumerate(board) if not cell
+        ]
+        
+        game_state = f"""Current Player: {current_player}
+Board State (with A1-C3 coordinates):
+{board_str}
+Available positions (A1-C3 coordinates): {available_positions}"""
+        return base_prompt.replace("{problem_description}", game_state)
 
     def _parse_move_from_response(self, response: str) -> int:
         """Extract the move from the LLM response."""
         import re
-
+        logger.info(f"Parsing response: {response}")
         # First priority: Look for "Final Move: X" format (1-9 indexing)
         final_move_match = re.search(
             r"Final\s+Move\s*:\s*([1-9])", response, re.IGNORECASE
@@ -141,6 +192,57 @@ class TicTacToeToTAgent:
             logger.info(f"Found 'Final Move' position: {move + 1}")
             return move
 
+        # Look for explicit coordinate statements first (highest priority)
+        coord_patterns = [
+            r"place\s+[oO]\s+(?:at\s+)?([A-C][1-3])",
+            r"move\s+[oO]\s+to\s+([A-C][1-3])",
+            r"([A-C][1-3])\s+is\s+the\s+best",
+            r"choose\s+([A-C][1-3])",
+            r"select\s+([A-C][1-3])",
+            r"let's\s+place\s+[oO]\s+at\s+([A-C][1-3])",
+            r"placing\s+[oO]\s+at\s+([A-C][1-3])",
+            r"play\s+in\s+the\s+center.*?([A-C][1-3])",
+            r"center.*?([A-C][1-3])",
+            r"best\s+move\s+is.*?([A-C][1-3])",
+            r"will\s+play.*?([A-C][1-3])",
+            r"final\s+move.*?([A-C][1-3])",
+            r"decision.*?([A-C][1-3])",
+            r"conclusion.*?([A-C][1-3])",
+            r"strategic.*?([A-C][1-3])",
+        ]
+        
+        final_move_match = re.search(r"Final\s+Move\s*:\s*([A-C][1-3])", response, re.IGNORECASE)
+        if final_move_match:
+            coord = final_move_match.group(1).upper()
+            if coord in coord_to_index:
+                logger.info(f"Found 'Final Move' coordinate: {coord}")
+                return coord_to_index[coord]
+
+
+        for pattern in coord_patterns:
+            match = re.search(pattern, response.upper())
+            if match:
+                coord = match.group(1)
+                if coord in coord_to_index:
+                    logger.info(f"Found coordinate: {coord}")
+                    return coord_to_index[coord]
+
+        # Look for standalone coordinates
+        coord_matches = re.findall(r"\b([A-C][1-3])\b", response.upper())
+        if coord_matches:
+            # Take the last coordinate mentioned
+            last_coord = coord_matches[-1]
+            if last_coord in coord_to_index:
+                logger.info(f"Found standalone coordinate: {last_coord}")
+                return coord_to_index[last_coord]
+
+        # Fallback: look for any coordinate pattern
+        coord_match = re.search(r"([A-C][1-3])", response.upper())
+        if coord_match:
+            coord = coord_match.group(1)
+            if coord in coord_to_index:
+                logger.info(f"Found coordinate in fallback: {coord}")
+                return coord_to_index[coord]
         # Second priority: Look for "I choose to place" format with 1-9 indexing
         choose_place_match = re.search(
             r"I\s+choose\s+to\s+place\s+[oO]\s+in\s+position\s+([1-9])",
@@ -256,6 +358,7 @@ class TicTacToeToTAgent:
 
             # Extract reasoning branches
             reasoning_branches = self._extract_reasoning_branches(final_answer)
+            logger.info(f"Extracted reasoning branches: {reasoning_branches}")
 
             # Validate the move
             board = state.get("board", [""] * 9)
@@ -308,7 +411,7 @@ def create_tot_agent() -> TicTacToeToTAgent:
     """
     Create and return a ToT agent instance.
     """
-    api_key = os.getenv("OPENAI_API_KEY")
+    api_key = os.getenv("GROQ_API_KEY")
     if not api_key:
-        raise ValueError("OPENAI_API_KEY environment variable is not set")
+        raise ValueError("GROQ_API_KEY environment variable is not set")
     return TicTacToeToTAgent(api_key)
