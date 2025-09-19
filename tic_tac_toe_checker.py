@@ -137,14 +137,36 @@ class TicTacToeToTChecker(ToTChecker):
                 "C3": 8,
             }
 
-            # Look for A1-C3 coordinates first (new system)
+            # First priority: Look for the "Final Move: XX" format
+            final_move_match = re.search(
+                r"Final\s+Move\s*:\s*([A-C][1-3])", thought, re.IGNORECASE
+            )
+            if final_move_match:
+                coord = final_move_match.group(1).upper()
+                if coord in coord_to_index:
+                    return coord_to_index[coord]
+
+            # Second priority: Look for "I choose to place" format
+            choose_place_match = re.search(
+                r"I\s+choose\s+to\s+place\s+[oO]\s+in\s+\*?\*?([A-C][1-3])\*?\*?",
+                thought,
+                re.IGNORECASE,
+            )
+            if choose_place_match:
+                coord = choose_place_match.group(1).upper()
+                if coord in coord_to_index:
+                    return coord_to_index[coord]
+
+            # Look for explicit coordinate statements (second priority)
             coord_patterns = [
                 r"place\s+[oO]\s+(?:at\s+)?([A-C][1-3])",
                 r"move\s+[oO]\s+to\s+([A-C][1-3])",
                 r"([A-C][1-3])\s+is\s+the\s+best",
                 r"choose\s+([A-C][1-3])",
                 r"select\s+([A-C][1-3])",
-                r"play\s+in\s+([A-C][1-3])",
+                r"let's\s+place\s+[oO]\s+at\s+([A-C][1-3])",
+                r"placing\s+[oO]\s+at\s+([A-C][1-3])",
+                r"play\s+in\s+the\s+center.*?([A-C][1-3])",
                 r"center.*?([A-C][1-3])",
                 r"best\s+move\s+is.*?([A-C][1-3])",
                 r"will\s+play.*?([A-C][1-3])",
@@ -161,14 +183,65 @@ class TicTacToeToTChecker(ToTChecker):
                     if coord in coord_to_index:
                         return coord_to_index[coord]
 
-            # Look for standalone coordinates
-            coord_matches = re.findall(r"\b([A-C][1-3])\b", thought.upper())
-            if coord_matches:
-                last_coord = coord_matches[-1]
-                if last_coord in coord_to_index:
-                    return coord_to_index[last_coord]
+            # Look for decision-oriented coordinates (higher priority than lists)
+            decision_patterns = [
+                r"place\s+[oO]\s+in\s+([A-C][1-3])",
+                r"play\s+in\s+([A-C][1-3])",
+                r"choose\s+([A-C][1-3])",
+                r"select\s+([A-C][1-3])",
+                r"move\s+to\s+([A-C][1-3])",
+                r"position\s+([A-C][1-3])",
+                r"recommended\s+move.*?([A-C][1-3])",
+                r"best\s+move.*?([A-C][1-3])",
+                r"final\s+move.*?([A-C][1-3])",
+                r"decision.*?([A-C][1-3])",
+                r"conclusion.*?([A-C][1-3])",
+                r"strategic.*?([A-C][1-3])",
+                r"optimal.*?([A-C][1-3])",
+                r"strongest.*?([A-C][1-3])",
+            ]
 
-            # Fallback: look for any coordinate pattern
+            for pattern in decision_patterns:
+                match = re.search(pattern, thought.upper())
+                if match:
+                    coord = match.group(1)
+                    if coord in coord_to_index:
+                        return coord_to_index[coord]
+
+            # Look for coordinates in decision sentences (avoid coordinate lists)
+            sentences = re.split(r"[.!?]", thought.upper())
+            decision_sentences = [
+                s
+                for s in sentences
+                if any(
+                    word in s
+                    for word in [
+                        "BEST",
+                        "CHOOSE",
+                        "DECISION",
+                        "CONCLUSION",
+                        "CENTER",
+                        "STRATEGIC",
+                        "WILL",
+                        "SHOULD",
+                        "RECOMMEND",
+                        "OPTIMAL",
+                        "STRONGEST",
+                        "PLACE",
+                        "PLAY",
+                        "MOVE",
+                    ]
+                )
+            ]
+
+            for sentence in decision_sentences:
+                coord_match = re.search(r"([A-C][1-3])", sentence)
+                if coord_match:
+                    coord = coord_match.group(1)
+                    if coord in coord_to_index:
+                        return coord_to_index[coord]
+
+            # Fallback: look for any coordinate pattern (but avoid obvious lists)
             coord_match = re.search(r"([A-C][1-3])", thought.upper())
             if coord_match:
                 coord = coord_match.group(1)
